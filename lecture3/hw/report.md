@@ -5,39 +5,49 @@
 
 ## 1. 图像生命周期与所有权
 
-`ImageSequenceSource` 用一块成员 `buffer_` 模拟相机内部缓冲区：每次 `next()` 先把新图 `copyTo(buffer_)`，再交给 `Frame`。真实相机也是这样，采集环里只有有限几块内存，读下一帧就会覆盖上一块。
+解释本项目中图像源为什么会复用缓冲区，以及 `cv::Mat` 的普通复制对底层像素数据
+意味着什么。说明你的修改让一个 `Frame` 在进入队列后拥有什么，并解释为何后续读取
+不会再改变它。
 
-`cv::Mat` 的普通赋值是浅拷贝，只复制头信息并增加引用计数，像素仍指向同一块内存。原先写的是 `frame.image = buffer_`，于是入队的 `Frame` 和源里的 `buffer_` 共享像素。下一次 `next()` 再往 `buffer_` 里写，已经交给队列、甚至正在被 worker 处理的旧帧也会一起变掉，checksum 对不上，就会被记成 corrupted。
-
-修改是 `frame.image = buffer_.clone()`。`clone()` 分配新的像素缓冲并拷贝数据，这一帧从此自己拥有图像。之后源再复用 `buffer_`，改的是源自己的那份，碰不到已经入队的 `Frame`。`expected_checksum` 在 clone 之前对 `buffer_` 算一次，和入队后的独立副本内容一致，worker 侧再校验就能通过。
+复用缓冲区是因为每一次都会进入同一个imagesequencesource,然后调用同一个buffer，会一直到wait结束，不会重建；
+普通复制是让两个对象共享同样的内存，所以修改会同步修改；
+我的修改让两个对象有了自己单独的内存，相当于有一份自己独立的备份，就不会对之前的数据有影响
 
 ## 2. 并发处理与恰好一次
 
-`BlockingQueue` 的 `push` 在锁内把元素 `move` 进 `std::queue`，再 `notify_one`；`pop` 在锁内等到「已关闭或队列非空」，若队列空则返回 false，否则把队首 `move` 给调用者。一次 `pop` 只唤醒并交给一个 worker，同一帧不会被两个人取走。
+结合 `BlockingQueue` 的 `push`、`pop` 和 `close` 行为，解释多个 worker 如何分工。
+为什么你的实现既不会漏掉已经入队的帧，也不会重复处理同一帧？输入耗尽时，正在等待
+以及仍在处理数据的 worker 分别会怎样？
 
-producer 每成功 `next()` 一帧就 `onProduced()`，再 `push(std::move(frame))`。输入耗尽后调用 `queue_.close()`。close 只是把 `closed_` 置位并 `notify_all`，并不丢弃已经在队列里的元素。因此：
-
-- 已入队但还没被取走的帧，worker 仍会 `pop` 出来处理，不会漏。
-- 每个元素只会被 move 走一次，不会重复处理。
-- 输入耗尽时，正在处理当前帧的 worker 做完本轮（校验、process、imwrite）后再次 `pop`；若队列已空且已 close，`pop` 返回 false，循环结束。
-- 卡在 `pop` 上等待的 worker 被 `notify_all` 唤醒，发现队列空且已关闭，同样返回 false 退出。
-
-所以「恰好一次」来自队列的互斥交付，而不是靠额外的帧 ID 去重。
+流程是先move一个frame,然后push用一个mutex,再判定可以move一个value,开锁之后去唤醒一个worker,pop流程的循环判定为真，先锁住再move那一份value，再开锁，直到没有frame之后进行close,多个worker不会同时处理一份value,有一份待处理的frame就会唤醒一个睡觉的worker,不会干扰正在处理value的worker;
+不会漏帧是因为只要有frame循环就会进行，就会push,如果close之后仍然有frame没处理也不会影响循环进行；
+不会重复处理同一帧是因为两个worker不会同时处理同一帧而且使用move命令也不会被二次处理，它之前的存放位置已经空了；
+输入耗尽时，while不满足循环条件，会停止push,正在等待的worker原本在睡觉，直到close被调用就会被唤醒，而正在工作的worker会在工作之后继续pop一次，有帧就干活，没有且没有clode就睡觉直到close,没有且有close就被唤醒；
 
 ## 3. 共享统计数据
 
-producer 线程调用 `onProduced()`；每个 worker 调用 `onProcessed()`、`onSaved()`，校验失败时还调用 `onCorrupted()`；main 在 `wait()` 之后通过 `snapshot()` 读四个计数。这些调用会交错发生。
+指出哪些线程会读写 `Statistics`。解释原实现中的竞争为什么可能导致错误结果，并说明
+你的同步方案提供了什么保证。还应说明取得快照时为什么是安全的。
 
-原实现把「读旧值 → 睡 100µs → 写成旧值+1」暴露成一段无锁代码。两个线程读到同一个旧值，后写的覆盖先写的，一次更新就丢了。`snapshot()` 无锁读四个 `int`，也可能读到只改了一半的组合。
-
-现在 `Statistics` 内有一把 `mutable std::mutex`。所有 `onXxx()` 和 `snapshot()` 都在 `lock_guard` 里进行。同一时刻只有一个线程能改计数，慢递增仍然保留（题目用它放大竞争），但竞争被锁消掉了。`snapshot()` 也在同一把锁下拷贝四个字段，读到的是一致的一组值，不会出现 produced 已经加完、processed 还是旧值这种撕裂快照。
+worker的onprocessed onsaved oncorrupted和producer还有main的snapshot;
+因为原本的数据没有上锁，几个worker可以改同一份数据，就会让一个线程还没结束数据就被另一个线程改了，实际上是可能会让计数比实际次数少；
+同步方案提供的保证是一份数据在一个时间段内只能由一个线程修改，避免让一个值被修改两次导致其中一次修改被覆盖；
+四个数据是在同一把锁下被控制的，拷的时候谁都不能改，就是安全的
 
 ## 4. 线程关闭协议
 
-`std::thread` 在仍然 `joinable()` 时析构会直接 `std::terminate`。因此所有已 `start()` 的线程必须在 `Pipeline` 销毁前被 join。
+分别描述以下两条路径中的事件顺序，并解释为什么不会发生 `std::terminate`、悬空访问
+或永久等待：
 
-1. 显式 `wait()`：producer 读完图像后自己 `queue_.close()`，再结束；`wait()` 先 join producer，再 join 每个 worker。worker 侧 `pop` 在 close 且队列空时返回 false，循环退出，join 能返回。这条路径不会永久等待，因为 close 一定发生在 producer 退出之前。
+1. 调用者执行 `start()` 后显式调用 `wait()`；
+2. 调用者执行 `start()` 后不调用 `wait()`，直接让 `Pipeline` 析构。
 
-2. 不调用 `wait()`，直接析构：`~Pipeline()` 先 `queue_.close()`，再调用 `wait()`。先 close 是为了叫醒还堵在 `pop` 上的 worker，以及让仍在跑的 producer 后续 `push` 直接丢弃（`push` 发现已关闭就 return）。然后 join 所有线程。这样不会留下 joinable 的 `std::thread`，也就不会 `terminate`；worker 也不会在对象销毁后还访问 `queue_` / `statistics_`。
+如果你的实现允许某个生命周期方法被重复调用，也请说明其行为；如果不允许，请说明前置条件。
 
-`wait()` 对每个线程都判断了 `joinable()`，join 过的线程再 wait 或再进析构是空操作，因此析构里调用 `wait()` 是安全的。`start()` 没有“已启动”标志，重复调用会再创建一批线程，前置条件是整个生命周期只 `start()` 一次。`close()` 可以重复调用。
+第一种路径是等到producer工作后close,wait把线程都join,进入析构函数再释放，不会有问题；
+第二种路径是未知是否处理完成直接进入析构函数，在析构函数里进行close，安全结束现有线程并wait等待全部善后完毕进行join再释放，和第一种情况都是在线程全被结束之后释放，也不会有问题；
+wait可以重复调用，已经wait过后joinable的判定已经false，再次wait就不会join；
+close可以重复调用，已经close再调用一次不会影响数据的状态；
+start不可以重复调用，再次调用start之后会开启一批新线程，若仍在joinable下，给producer_赋值会termination
+
+
