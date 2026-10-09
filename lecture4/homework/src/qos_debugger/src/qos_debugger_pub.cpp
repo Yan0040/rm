@@ -14,7 +14,8 @@ public:
     SensorPublisher()
         : Node("sensor_publisher")
     {
-        this->declare_parameter("reliability", "best_effort");
+        this->declare_parameter("reliability", "reliable");
+        //pub 默认 best_effort、sub 默认 reliable，QoS 不匹配就收不到。改 pub 的 reliability 默认值为 reliable
         this->declare_parameter("depth", 10);
         this->declare_parameter("rate", 100.0);
 

@@ -19,7 +19,8 @@ public:
   {
     this->declare_parameter("reliability", "reliable");
     this->declare_parameter("depth", 10);
-    this->declare_parameter("callback_delay_ms", 30);
+    this->declare_parameter("callback_delay_ms", 0);
+    //回调里 sleep 30 ms，处理慢于 100 Hz，队列只有 10，会丢包。把 callback_delay_ms 默认改成 0。
 
     reliability_ = this->get_parameter("reliability").as_string();
     depth_ = this->get_parameter("depth").as_int();
@@ -128,10 +129,18 @@ private:
         "累计: 收到 %u 条, 丢失 %u 条, 丢包率 %.2f%%",
         received_count_, lost_count_, loss_rate);
 
-    /*
-    在这之间加入计算帧率并打印的代码
-
-    */
+    //在这之间加入计算帧率并打印的代码
+    auto now = std::chrono::steady_clock::now();
+    const double dt = std::chrono::duration<double>(now - last_report_time_).count();
+    if (dt > 0.0)
+   {
+      const double fps = static_cast<double>(received_count_ - last_received_count_) / dt;
+    RCLCPP_INFO(this->get_logger(), "接收帧率: %.1f Hz", fps);
+   }
+    last_received_count_ = received_count_;
+     last_report_time_ = now;
+     //含义：定时器每秒进一次 report()，用这一秒内新收到的条数除以间隔，得到 Hz。last_* 更新到当前值，下一秒接着算。任务二把延迟去掉之后，帧率应接近发布端的 100 Hz。
+    
   }
 
   rclcpp::Subscription<nav_hw_interfaces::msg::SensorData>::SharedPtr subscription_;

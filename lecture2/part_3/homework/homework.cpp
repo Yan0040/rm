@@ -11,7 +11,19 @@
 
 int main()
 {
-    // TODO: 在这里完成你的代码
+  // TODO: 在这里完成你的代码
+  //duqu
+  cv::Mat img = cv::imread("assets/demo.jpg");
+  //huidutu
+  cv::Mat gray;
+  cv::cvtColor(img, gray, cv::COLOR_BGR2GRAY);
+  //imwrite
+  bool ok = cv::imwrite("gray.jpg", gray);
+  //circle
+  cv::circle(gray, cv::Point(100, 100), 80, cv::Scalar(0, 0, 255), 3);
+  //imshow
+  cv::imshow("gray", gray);
+  cv::waitKey(0);
 
-    return 0;
+  return 0;
 }

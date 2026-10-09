@@ -11,5 +11,7 @@ add_executable(cmake_learn
 
 add_executable(ex1 part_2/ex1/example1.cpp)
 add_executable(ex2 part_2/ex2/example2.cpp)
+add_executable(ex4 part_2/ex1/ex2.cpp)
 add_executable(ex3 part_2/ex3/car.cpp part_2/ex3/ex3.cpp)
+add_executable(homework part_3/homework/homework.cpp)
 find_package(OpenCV REQUIRED) 
