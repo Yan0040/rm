@@ -1,44 +1,55 @@
-# TODO: 在此补全参数
+# 迷宫评测参数：话题 / 坐标系与仿真、RViz、pluginlib 名称对齐
 planner_server:
   ros__parameters:
-    costmap_topic: 
-    local_costmap_topic:
-    path_topic:
-    plugin_name:
-    plugin_type:
+    costmap_topic: "/global_costmap"
+    local_costmap_topic: "/local_costmap/costmap"
+    path_topic: "/global_path"
+    plugin_name: "AStar"
+    plugin_type: "sp_global_planner/AStarPlanner"
 
     AStar:
-      lethal_cost:
-      cost_weight:
+      lethal_cost: 100
+      clear_cost: 25
+      cost_weight: 12.0
+      densify_ds: 0.06
+      smooth_iters: 2
 
 esdf_map_publisher:
   ros__parameters:
-    map_yaml:
+    map_yaml: "package://sp_nav_bringup/map/maze_map.yaml"
     frame_id: "map"
     publish_rate_hz: 1.0
     unknown_as_obstacle: false
-    robot_radius: 
-    margin:
-    d_safe:
-    w:
-    unknown_cost:
+    robot_radius: 0.25
+    margin: 0.05
+    d_safe: 0.70
+    w: 12.0
+    unknown_cost: 100
     visualize_esdf: false
 
 controller_server:
   ros__parameters:
-    local_path_topic:
-    odom_topic:
-    odom_frame_id:
+    local_path_topic: "/global_path"
+    odom_topic: "/Odometry"
+    odom_frame_id: "lidar_odom"
     map_frame_id: "map"
-    cmd_vel_topic:
+    cmd_vel_topic: "/sentry/cmd_vel"
     base_frame_id: "base_link"
     control_frequency: 50.0
 
-    plugin_name:
-    plugin_type:
+    plugin_name: "PidController"
+    plugin_type: "PidController"
 
     PidController:
       base_frame_id: "base_link"
+      q_pos: 8.0
+      q_vel: 1.2
+      r_acc: 0.22
+      dt: 0.02
+      lookahead_dist: 0.20
+      max_speed: 1.70
+      goal_tolerance: 0.10
+      slowdown_dist: 0.80
 
 sp_decision:
   ros__parameters:
